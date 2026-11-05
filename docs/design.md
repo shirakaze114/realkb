@@ -14,8 +14,11 @@
 - Do not export images as separate files in V1 or attempt diagram understanding. Users consult the retained original PDF for figures.
 - Keep simple page-numbered figure markers such as `[FIG p7-1]`, `[FIG p7-2]` where detectable, before splitting text into chunks, with a reference to the original page rather than an exported image. Imperfect placement is acceptable in V1. Do not alter the original PDF.
 - Use bundled `pdfjs-dist` inside the plugin for V1 PDF text extraction and figure-marker detection so extraction works self-contained in Pi without external CLI dependencies.
-- Provide an agent-facing import tool (`realkb_import`) requiring an explicit target KB and a list of paths. Each path may be a PDF or a directory; directory import includes PDFs recursively, including all subfolders. Do not guess the destination KB. If the target KB is not yet connected to the current session, connect it as part of an approved import.
-- Before importing a directory, the agent should inspect its contents, including subfolders, and flag unexpected or unrelated files. Require PDF-only contents after skipping all files and directories whose names begin with `.` (including their contents), such as `.DS_Store` and `.git`. Do not import a mixed directory containing other non-PDF files as-is.
+- Provide an agent-facing import tool (`realkb_import`) requiring an explicit target KB and a list of paths. Each path may be a source file (`.pdf`, `.md`, `.txt`) or a directory:
+  - Single specific file paths (`.pdf`, `.md`, `.txt`) are imported directly without needing `allow_ext`.
+  - Directory import includes `.pdf` files recursively by default. Pass `allow_ext: ["md", "txt"]` (or `["md"]`) to also include `.md` / `.txt` files from directories.
+  - Do not guess the destination KB. If the target KB is not yet connected to the current session, connect it as part of an approved import.
+- Before importing a directory, the agent should inspect its contents, including subfolders, and flag unexpected or unrelated files. Require only allowed extensions (`.pdf` by default, plus any in `allow_ext`) after skipping all files and directories whose names begin with `.` (including their contents), such as `.DS_Store` and `.git`. Do not import a mixed directory containing disallowed files as-is.
 - Queue imports to avoid conflicting writes. Reuse a single stored original PDF across KBs when the original-file hash matches; create a source membership in the target KB rather than another PDF copy.
 - Content is not restricted to academic papers: books, manuals, reports, slides, and other PDF documents are welcome. This does not yet require support for every file format.
 - Use permanent numeric KB IDs, unique within the local library and never reused, including after deletion.
@@ -82,6 +85,7 @@
 - Hash original PDF file bytes with SHA-256 (`64`-character lowercase hex internally in `objects/<sha256>.pdf` and `sources/<sha256>/`).
 - Citations use a 7-character hex prefix by default (`[rkb:001_c676ea9]`). At import time, check existing sources in that KB; if a different PDF shares the 7-character prefix, assign the new source the shortest longer prefix (`8+` characters) that is unique within that KB while preserving already-issued citation IDs.
 - Page suffixes use `p` followed by a positive, one-based PDF page number, as in `[rkb:001_c676ea9p7]`. The document-only form remains `[rkb:001_c676ea9]`.
+- Render `[rkb:001_c676ea9]` and `[rkb:001_c676ea9p7]` citations in Pi output as clickable hyperlinks (`file://` URLs pointing to the stored original PDF in `objects/<full-hash>.pdf`, with `#page=N` when a page suffix is present) so Ctrl-Click opens the PDF.
 
 ## Approved import failure and retry behavior
 
@@ -91,6 +95,10 @@
 - Reimporting a failed or unfinished document retries it under the same source identity; only already-successful duplicates are skipped.
 - Flag scanned or unreadable pages. If some pages provide usable text, clearly disclose incomplete coverage; if no usable text is extracted, do not claim a successful text import.
 - Return a clear batch summary with per-document outcomes and reasons, separating ready, already imported, and failed/unfinished sources.
+- Support background execution and live progress for `realkb_import` (modeled on `realtasks`):
+  - `run_in_background` defaults to `true` when importing `>= 2` PDFs (and `false` for a single PDF unless overridden): starts the import in the background right after approval and returns a job ID (`imp-1`) immediately. Foreground imports stream live `onUpdate` progress and automatically promote to the background after `timeout` seconds (default `15s`) so slow embedding calls never block the session.
+  - Display live per-file and per-chunk embedding progress (`[1/3] paper.pdf · embedding 16/48 chunks (33%)`) in a `realtasks`-style TUI dock widget (`realkb-dock`) and status bar (`📚 KB: 001 · ✱ imp-1 ...`), plus `/realkb jobs` and `/realkb stop [id|all]`.
+  - Deliver a `<realkb-notification>` custom message (with compact TUI message rendering and `agent_before_settle` support) when a background import finishes.
 - Keep V1 recovery simple: safe storage, honest status, and explicit retries, not an elaborate automatic recovery system.
 
 ## Approved retrieval and vector storage
@@ -188,6 +196,7 @@ Search text
 
 ## Future scope — not for v1
 
+- **TODO — Interactive TUI Manager (`/realkb` or `/realkb manage`)**: Spawn an interactive TUI overlay (modeled after `realtasks`'s `/tasks` TUI) to browse KBs, inspect/remove sources, view running/completed import job logs, and toggle session connections interactively.
 - Zotero-connect.
 - Knowledge-connect (meaning and scope to be clarified).
 - Per-KB embedding-model selection and multi-model retrieval.
