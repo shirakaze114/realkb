@@ -1,6 +1,6 @@
 # realkb
 
-Local PDF knowledge bases for [Pi](https://github.com/earendil-works/pi) with session-scoped connections, structure-aware chunking, hybrid `sqlite-vec` + `FTS5` retrieval, and traceable page-level citations.
+Local knowledge bases for [Pi](https://github.com/earendil-works/pi) with session-scoped connections, structure-aware chunking, hybrid `sqlite-vec` + `FTS5` retrieval, and traceable page-level citations.
 
 ## Features
 
