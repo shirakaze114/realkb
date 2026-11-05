@@ -1,8 +1,9 @@
-# Pi Knowledge Base — Design Notes
+# Pi Knowledge Base — Design
 
 ## Confirmed requirements
 
 - Build a Pi plugin.
+- Ship an agent skill alongside the tools, explaining when and how to use realkb: connecting KBs, importing into an explicit target, searching, reading evidence, locating original PDFs, and citing sources. The skill guides behavior; tool implementations enforce access and approval rules. Skill authoring remains implementation work, not something already completed.
 - V1 accepts PDFs and builds persistent knowledge bases that the agent can search and read.
 - Support multiple knowledge bases, each containing its own sources (imported documents).
 - A Pi session can connect to zero, one, or multiple KBs. The agent may access only the KBs connected to that session; no connected KBs means no KB access.
@@ -177,7 +178,7 @@ Search text
 
 - The user is not a professional IT worker. Explain technical choices in practical, plain language.
 - The user has access to an embedding API and wants its settings requested through configuration. Its provider, endpoint, model, and compatibility have not been confirmed.
-- Keep these notes in this project, not global memory.
+- Keep approved project requirements and design in `docs/design.md` (renamed from `docs/NOTES.md`). Store reusable operational knowledge and setup/API pitfalls in realctx instead of appending every discovery to this document; never store credentials.
 
 ## Proposed interpretations — not yet approved
 
