@@ -12,8 +12,9 @@
 - Keep original PDFs so the user can return to and verify the original source.
 - V1 extracts existing PDF text, without OCR (recognizing text in scanned pages or images).
 - Do not export images as separate files in V1 or attempt diagram understanding. Users consult the retained original PDF for figures.
-- Keep simple figure markers such as `[FIG1]` where detectable, before splitting text into chunks, with a reference to the original page rather than an exported image. Exact syntax is not finalized; imperfect placement is acceptable in V1. Do not alter the original PDF.
-- Provide an agent-facing import tool (tentative name: `rkb_importpdf`) requiring an explicit target KB and a list of paths. Each path may be a PDF or a directory; directory import includes PDFs recursively, including all subfolders. Do not guess the destination KB.
+- Keep simple page-numbered figure markers such as `[FIG p7-1]`, `[FIG p7-2]` where detectable, before splitting text into chunks, with a reference to the original page rather than an exported image. Imperfect placement is acceptable in V1. Do not alter the original PDF.
+- Use bundled `pdfjs-dist` inside the plugin for V1 PDF text extraction and figure-marker detection so extraction works self-contained in Pi without external CLI dependencies.
+- Provide an agent-facing import tool (`realkb_import`) requiring an explicit target KB and a list of paths. Each path may be a PDF or a directory; directory import includes PDFs recursively, including all subfolders. Do not guess the destination KB. If the target KB is not yet connected to the current session, connect it as part of an approved import.
 - Before importing a directory, the agent should inspect its contents, including subfolders, and flag unexpected or unrelated files. Require PDF-only contents after skipping all files and directories whose names begin with `.` (including their contents), such as `.DS_Store` and `.git`. Do not import a mixed directory containing other non-PDF files as-is.
 - Queue imports to avoid conflicting writes. Reuse a single stored original PDF across KBs when the original-file hash matches; create a source membership in the target KB rather than another PDF copy.
 - Content is not restricted to academic papers: books, manuals, reports, slides, and other PDF documents are welcome. This does not yet require support for every file format.
@@ -33,12 +34,29 @@
 - Make sources traceable and limitations visible; do not silently present incomplete extraction as complete.
 - Import deliberately, inspect directories first, and avoid surprising background behavior.
 
-## Connection and approval controls
+## Commands, tools, connection, and approval controls
 
-- V1 includes a user command such as `/realkb connect` and an agent-facing tool that can request KB connections.
-- Ask for approval by default, unless the user enables YOLO mode through `/realkb config` or explicitly grants a session-only no-prompt override.
-- Support both a saved global approval configuration and a current-session override, including review and YOLO/no-prompt behavior.
-- Use a small approval dialog for agent-requested actions. The user's import example has three choices: "Yes, import", "No" with an optional reason, and "Yes and do not ask me for this session". Apply the corresponding wording to connection requests.
+- V1 user slash commands:
+  - `/realkb create <name>`: create a new knowledge base.
+  - `/realkb connect [id-or-name]`: connect a KB to the current session.
+  - `/realkb disconnect [id-or-name]`: disconnect a KB from the current session.
+  - `/realkb list`: list local KBs and their connection status.
+  - `/realkb config`: view or update global settings (such as approval mode and embedding configuration status, without exposing secret keys).
+  - `/realkb cleanup`: explicitly remove unreferenced shared PDF files under `objects/` that are not referenced by any KB.
+- V1 agent-facing tools (unified `realkb_` prefix):
+  - `realkb_list`: list local KBs (ID, name, and current-session connection status). Does not expose document titles or contents of disconnected KBs.
+  - `realkb_create`: create a new KB (asks for approval by default).
+  - `realkb_connect`: connect or disconnect KBs for the current session (asks for approval by default when connecting).
+  - `realkb_import`: import PDFs or PDF-only directories into an explicit target KB (asks for approval by default; connects the target KB if not already connected).
+  - `realkb_search`: hybrid search across connected KBs (or an optional subset of connected KBs).
+  - `realkb_read`: read passages or PDF pages from a connected KB.
+  - `realkb_source_info`: resolve a specific source reference (`001_c676ea9`, `[rkb:001_c676ea9]`, or `001:c676ea9`) and return its metadata and original PDF path.
+- Ask for approval by default, unless the user enables YOLO mode through `/realkb config` or explicitly grants a session-only no-prompt override. An explicit user command such as `/realkb connect` or `/realkb create` does not need a redundant approval dialog; agent-requested actions follow the effective approval setting.
+- Support both a saved global approval configuration (`"approvalMode": "ask" | "yolo"`, default `"ask"`) and current-session overrides.
+- Separate session "do not ask again for this session" overrides by action category (connecting/creating KBs versus importing PDFs).
+- Use a small approval dialog for agent-requested actions with three choices: "Yes, ...", "No" with an optional reason, and "Yes, and don't ask again for [connections/imports] this session".
+- In the import approval prompt, clearly notify the user that extracted PDF text will be sent to the configured embedding API.
+- YOLO mode skips approval prompts only; it does not automatically connect all KBs or bypass connected-KB access checks.
 - A session override must not change the saved global preference.
 - These basic commands and permission dialogs are needed in V1; the richer KB/source-management interface remains future scope.
 
@@ -59,11 +77,11 @@
 
 ## Approved identities and citations
 
-- Numeric KB IDs must remain unique even after KB deletion. Keep durable allocation history rather than deriving the next ID solely from surviving KB folders; exact counter storage is not yet selected.
+- Numeric KB IDs must remain unique even after KB deletion. Record `lastKbId` in `~/.pi/agent/realkb/state.json` (separate from user-edited `config.json`) and allocate each new KB ID as `max(lastKbId, highest numeric folder in kbs/) + 1`, formatted with at least three digits (`001`, `002`, ...).
 - Renaming a KB does not change its ID. Deleting a KB must never make an old citation point to a different KB later.
-- Retain full source hashes internally; citation hashes may be shortened.
+- Hash original PDF file bytes with SHA-256 (`64`-character lowercase hex internally in `objects/<sha256>.pdf` and `sources/<sha256>/`).
+- Citations use a 7-character hex prefix by default (`[rkb:001_c676ea9]`). At import time, check existing sources in that KB; if a different PDF shares the 7-character prefix, assign the new source the shortest longer prefix (`8+` characters) that is unique within that KB while preserving already-issued citation IDs.
 - Page suffixes use `p` followed by a positive, one-based PDF page number, as in `[rkb:001_c676ea9p7]`. The document-only form remains `[rkb:001_c676ea9]`.
-- The user considers hash collisions unlikely and wants to avoid an elaborate collision-handling system in V1. A minimal safety check is proposed below, not yet approved.
 
 ## Approved import failure and retry behavior
 
@@ -77,10 +95,10 @@
 
 ## Approved retrieval and vector storage
 
-- `realkb_search`: search only connected KBs and return relevant original-text passages with source references and PDF page locations.
-- `realkb_read`: read a passage identified by a search result or a specified PDF page. Example source/page reference: `001:0123abcp6`; exact argument schema and passage handles remain to be designed.
-- `realkb_source_info`: resolve a source reference such as `001:0123abc` and return its original PDF path and source information. This does not connect or grant access to an otherwise disconnected KB.
-- Tool references and citations identify the same KB/source/page; for example, `001:0123abcp6` corresponds to `[rkb:001_0123abcp6]`.
+- `realkb_search`: search only connected KBs (or an optional specified subset of connected KBs) and return relevant original-text passages with source references, `chunk_index`, and PDF page locations.
+- `realkb_read`: read a passage or page range from a connected KB, accepting citation syntax (`[rkb:001_c676ea9p7]`, `001_c676ea9p7`) or colon syntax (`001:c676ea9p7`), plus optional `chunk` index (`± neighbors` surrounding chunks) or `pageEnd` range.
+- `realkb_source_info`: resolve an explicit source reference (`001_c676ea9`, `[rkb:001_c676ea9]`, or `001:c676ea9`) and return its original PDF path and source metadata. Resolving a specified source reference is permitted even if that KB is not currently connected, and does not connect the KB or grant `realkb_search`/`realkb_read` access.
+- Tool references and citations identify the same KB/source/page; for example, `001_0123abcp6` and `001:0123abcp6` correspond to `[rkb:001_0123abcp6]`.
 - Embed chunks of original extracted text during import. Embed the query during search and compare it with stored chunk vectors; do not re-embed documents on every query.
 - Do not generate or embed document summaries in V1, or use summaries to filter which documents can be searched.
 - Use SQLite with `sqlite-vec`, with one `index/search.sqlite` database per KB holding chunks, vectors, and source/page associations. Store vectors as binary numeric data rather than large JSON files.
@@ -136,6 +154,7 @@ Search text
 ```text
 ~/.pi/agent/realkb/
 ├── config.json
+├── state.json
 ├── objects/
 │   └── <full-hash>.pdf
 ├── kbs/
@@ -152,13 +171,14 @@ Search text
 └── tmp/
 ```
 
-- `config.json`: global preferences, including approval mode and embedding-service settings; not session connections.
+- `config.json`: global preferences (`approvalMode`: `"ask" | "yolo"`, default `"ask"`, and OpenAI-compatible `embedding` settings); not session connections. Keep file permissions `0600`.
+- `state.json`: internal durable state such as `lastKbId` so deleted KB numbers are never reused.
 - `kbs/<kb-id>/kb.json`: the KB's name, permanent numeric ID, and details. Renaming the KB does not change its identity. `001` and `002` above illustrate the numeric IDs; their allocation must never reuse a deleted KB's number.
-- `objects/<full-hash>.pdf`: one unchanged original PDF per unique file hash, shared across KBs and independent of the input file's continued existence. This supersedes storing `original.pdf` separately inside each KB source folder.
-- `sources/<source-hash>/`: a source's membership and extracted data in this KB, using its full hash internally rather than a shortened citation prefix.
-- `source.json`: references the shared original and holds document information such as original filename, hash, import date, and processing status; exact schema remains open. A metadata reference is sufficient; an operating-system symlink is not required.
-- Sharing original storage does not connect KBs or grant access to unrelated sources. Removing a source membership must not delete a PDF still referenced by another KB.
-- `pages.json`: full extracted text organized by PDF page, retaining simple figure markers. Keep this text, not just search chunks.
+- `objects/<full-hash>.pdf`: one unchanged original PDF per unique SHA-256 file hash, shared across KBs and independent of the input file's continued existence. This supersedes storing `original.pdf` separately inside each KB source folder.
+- `sources/<source-hash>/`: a source's membership and extracted data in this KB, using its full SHA-256 hash internally rather than a shortened citation prefix.
+- `source.json`: references the shared original and holds document information such as original filename, full hash, assigned short hash, import date, and processing status. A metadata reference is sufficient; an operating-system symlink is not required.
+- Sharing original storage does not connect KBs or grant access to unrelated sources. Never auto-delete PDFs in `objects/` when a source or KB is removed; `/realkb cleanup` explicitly removes unreferenced PDFs in `objects/` that are no longer referenced by any KB.
+- `pages.json`: full extracted text organized by PDF page, retaining page-numbered figure markers (`[FIG p7-1]`). Keep this text, not just search chunks.
 - `index/search.sqlite`: rebuildable chunks and vector-search data using SQLite with `sqlite-vec`; exact database schema remains open.
 - `tmp/`: temporary import work, not searchable KB content.
 - Discover KBs by scanning their directories and reading each `kb.json`. Do not maintain a separate `kbs.json` registry in V1. Each KB's own metadata is authoritative; any future cached catalog must be rebuildable.
@@ -177,22 +197,7 @@ Search text
 ## User context
 
 - The user is not a professional IT worker. Explain technical choices in practical, plain language.
-- The user has access to an embedding API and wants its settings requested through configuration. Its provider, endpoint, model, and compatibility have not been confirmed.
 - Keep approved project requirements and design in `docs/design.md` (renamed from `docs/NOTES.md`). Store reusable operational knowledge and setup/API pitfalls in realctx instead of appending every discovery to this document; never store credentials.
-
-## Proposed interpretations — not yet approved
-
-- Scope image placeholders to their document so identical marker names in different PDFs do not collide.
-- Target an OpenAI-compatible embedding API, with configurable API address, API key, and model; the user suggested compatibility tentatively. No provider or model has been selected.
-- Use a minimal short-hash collision check at import time rather than elaborate collision machinery. If necessary, give the new source a longer short ID while preserving already issued citation IDs; exact assignment and lookup behavior remain open.
-- Enforce session-connected KB scope in KB tools, not merely through instructions to the model. This is a plugin access boundary, not a sandbox for unrestricted filesystem tools.
-- Resolve citations back to stored documents and, optionally, specific pages.
-- Clearly disclose that a remote embedding API receives extracted text before transmitting private documents.
-- A session's "do not ask again" approval applies to that action type (for example, connecting versus importing), not every possible action; confirm permission granularity with the user.
-- YOLO skips approval prompts only; it does not automatically connect all KBs or bypass connected-KB access checks.
-- An explicit user `/realkb connect` command does not need a redundant approval dialog; agent-requested connections follow the effective approval setting.
-- Retain unreferenced shared originals in V1 instead of introducing automatic garbage collection; exact deletion/cleanup behavior is not yet approved.
-- The import queue must coordinate writers across Pi sessions, with safe metadata/ID writes. A per-session queue alone does not prevent cross-session races; exact locking/queue mechanism is an implementation detail.
 
 ## Chunking design
 
@@ -226,26 +231,21 @@ Chunking uses a deterministic, structure- and sentence-aware pipeline without ex
    - Expose the full `page_start..page_end` range and source-span mappings for multi-page hits. A single-page citation (`[rkb:001_c676ea9p7]`) must identify the page containing the cited evidence, not automatically the first or majority page. If evidence spans pages, return the relevant individual page citations; no new page-range citation grammar is required for V1.
    - Individual chunks do not need to preserve all meaning independently: use `chunk_index` in `realkb_search` and `realkb_read` to merge or deduplicate adjacent overlapping hits and to fetch `chunk_index ± k` when the agent reads surrounding context. Keep these operations within the same KB/source, preserve page mappings, bound response sizes, and guarantee progress even when overlap cannot fit.
 
-## Configuration discussion — proposed user-facing scope
+## Configuration schema (`~/.pi/agent/realkb/config.json`)
 
-- Keep V1 configuration small: embedding-service connection details plus approval mode (ask by default, optional YOLO).
-- Embedding setup needs the API address, model name, and credentials if the service requires them. Decide secure credential handling during implementation; never put real keys in these notes or logs.
+- Keep V1 configuration small: OpenAI-compatible embedding-service connection details (`embedding`: `endpoint`, `apiKey`, `model`, `dimensions`, `queryInstruction`, `timeoutMs`, `batchSize`) plus `approvalMode` (`"ask"` by default, optional `"yolo"`).
+- Keep `~/.pi/agent/realkb/config.json` with mode `0600`; never print or log secret API keys.
 - Reuse Pi's active conversational model for answering; no separate chat/summarization model setup is needed for V1.
-- Keep chunk sizes, overlap, ranking parameters, database details, retries, and similar machinery as sensible implementation defaults rather than required user decisions.
-- Configuration and storage share the agreed default directory `~/.pi/agent/realkb/`; connected KBs and import destinations are session/action state, not extra required global setup.
-- This section records the current configuration proposal, not a finalized config schema or a created configuration file.
+- Keep chunk sizes, overlap, ranking parameters, database details, retries, and cross-session file locking as sensible implementation defaults rather than required user decisions.
+- Configuration and storage share the agreed default directory `~/.pi/agent/realkb/`; connected KBs and session approval overrides are stored in Pi's session persistence, and durable counter state (`lastKbId`) lives in `~/.pi/agent/realkb/state.json`.
 
-## Open decisions
+## Remaining implementation details (non-blocking)
 
-- Numeric KB ID allocation and durable counter storage; citation syntax and component meanings are approved above. Section and page-range locators are not specified.
-- Exact KB creation and connect/disconnect command/tool interfaces; their session-lifecycle behavior is approved above.
-- Action-specific versus shared approval settings and global/session configuration syntax. The user explicitly deferred the follow-up on permission enforcement and approval before remote transmission; do not treat that follow-up as settled.
-- Hash algorithm, initial short-hash length, and minimal collision-check behavior. Original-file-byte identity and duplicate/version behavior are approved above.
-- Embedding provider and configuration for the single global model; never store secret API keys in these notes.
-- PDF text extraction and figure-marker detection methods, exact metadata/database schemas, result limits, passage handles, similarity metric, and hybrid rank-fusion parameters. SQLite with `sqlite-vec` is approved, subject to runtime and scale checks; failure/retry behavior and disclosure of pages without usable text are approved above.
-- Final import/connection tool names and exact retrieval-tool argument schemas; retrieval tool roles and names are approved above.
-- Shared-original deletion/cleanup policy; never delete an original still referenced by a KB.
+- Exact JSON field names inside `kb.json`, `source.json`, and `pages.json`.
+- Exact SQLite table/index definitions in `index/search.sqlite`, vector similarity metric, and hybrid rank-fusion weights (adapting `realctx`'s FTS5 + `sqlite-vec` patterns).
+- Cross-session file lock implementation under `~/.pi/agent/realkb/` to serialize concurrent imports and `state.json` updates across Pi processes.
+- Runtime verification of `pdfjs-dist` and `sqlite-vec` inside Pi's runtime during implementation.
 
 ## Handoff
 
-The user requested discussion before implementation. No plugin implementation has begun. The approved layout now shares original PDFs under `objects/` and discovers KBs via per-KB `kb.json` files rather than a separate registry. Default approval mode, explicit import destinations, session lifecycle behavior, permanent numeric KB IDs, original-file-byte identity, `p`-suffixed citations, failure/retry behavior, queued imports, dot-entry exclusions, and retrieval-tool roles are confirmed. V1 uses one global embedding model, original-text chunk embeddings without summaries, and per-KB SQLite/`sqlite-vec` search databases, subject to runtime and scale validation. Hybrid meaning/keyword retrieval and adapting realctx's storage/search infrastructure are approved; realkb's behavior remains independent, without realctx's memory-management or context-compression features. Permission-enforcement follow-up remains deferred. This file records the discussion; proposals above must not be treated as confirmed requirements.
+All core V1 product and design decisions are now confirmed in this document. No plugin or skill implementation has begun yet. When implementation starts, build the Pi extension (`realkb_*` tools and `/realkb` commands), the storage/extraction/chunking/search engine under `~/.pi/agent/realkb/`, and the bundled Pi skill teaching KB connection, directory inspection before import, hybrid retrieval, and citation formatting.
