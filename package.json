@@ -30,7 +30,8 @@
     "extensions",
     "skills",
     "docs",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "bun test --timeout 60000",
